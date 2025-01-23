@@ -1,6 +1,7 @@
 package com.example.audioaccelerometerlogger
 
 import android.annotation.SuppressLint
+import android.content.res.AssetFileDescriptor
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -19,6 +20,10 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
@@ -38,14 +43,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // +---------+
     private lateinit var hzTextView: TextView
     private lateinit var trackNameTextView: TextView
+    private lateinit var trackIdTextView: TextView
     private lateinit var trackProgressBar: ProgressBar
     private lateinit var startTestButton: Button
+
+    // +--------------+
+    // | UI data vars |
+    // +--------------+
+    private var updatedTrack = false
 
     // +------------------+
     // | MediaPlayer vars |
     // +------------------+
     private lateinit var mediaPlayer: MediaPlayer
     private var playingMediaPlayer: MediaPlayer? = null
+    private var nextMediaPlayer: MediaPlayer? = null
+    private var playingResourceFd: AssetFileDescriptor? = null
+    private var nextResourceFd: AssetFileDescriptor? = null
+    private var isNextPrepared = false
+    private lateinit var trackStartTimestamp: TimeMark
     private var playingTrackId = 0
     private lateinit var tracks: ArrayList<String>
     private lateinit var trackNames: ArrayList<String>
@@ -54,7 +70,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // | Accelerometer Data |
     // +--------------------+
     private lateinit var lastBatchPull: TimeMark
-    private val hzCalculationMeasurementCount = 100
+    private val hzCalculationMeasurementCount = 25
     private var measurementCount = 0
 
     // +-----------+
@@ -77,6 +93,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // Initializing UI elements
         hzTextView = findViewById(R.id.hzTextView)
         trackNameTextView = findViewById(R.id.trackNameTextView)
+        trackIdTextView = findViewById(R.id.trackIdTextView)
         trackProgressBar = findViewById(R.id.trackProgressBar)
         startTestButton = findViewById(R.id.startTestButton)
 
@@ -140,11 +157,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         if (playingMediaPlayer != null && playingMediaPlayer!!.isPlaying) {
             val mediaTimestamp = playingMediaPlayer!!.currentPosition
+            val calculatedMediaTimestamp = trackStartTimestamp.elapsedNow().inWholeMilliseconds
             val trackName = trackNames[playingTrackId]
 
-            if (mediaTimestamp > 0) {
-                dataFile.appendText("$currentTimestamp, $x, $y, $z, $mediaTimestamp, $trackName\n")
-            }
+            dataFile.appendText("$currentTimestamp, $x, $y, $z, $mediaTimestamp, $calculatedMediaTimestamp, $trackName\n")
             // Log.d("DEVEL", "Writing log: $currentTimestamp, $x, $y, $z, $mediaTimestamp, $trackName")
         }
     }
@@ -184,12 +200,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val filename = getDeviceName() + "_" + currentDate + ".txt"
         dataFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), filename)
         Log.d("DEVEL", "Started test, log file: $filename")
-        dataFile.writeText("Timestamp, X, Y, Z, MediaTimestamp, TrackName\n")
+        dataFile.writeText("Timestamp, X, Y, Z, MediaTimestamp, CalculatedMediaTimestamp, TrackName\n")
 
         // Restart MediaPlayer
         playingMediaPlayer = mediaPlayer
         playingTrackId = 0
+
+        trackNameTextView.text = trackNames[playingTrackId]
+        trackIdTextView.text = "$playingTrackId/${tracks.size}"
+
         mediaPlayer.start()
+        trackStartTimestamp = timeSource.markNow()
     }
 
     @SuppressLint("SetTextI18n")
@@ -229,12 +250,19 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         player.setOnCompletionListener {
             player.stop()
+            player.reset()
             player.release()
+
             if (id + 1 < tracks.size) {
                 val nextPlayer = createMediaPlayer(id + 1)
                 playingMediaPlayer = nextPlayer
                 playingTrackId = id + 1
+
+                trackNameTextView.text = trackNames[playingTrackId]
+                trackIdTextView.text = "$playingTrackId/${tracks.size}"
+
                 nextPlayer.start()
+                trackStartTimestamp = timeSource.markNow()
             } else {
                 endTest()
             }
