@@ -16,6 +16,8 @@ import android.os.Environment
 import android.util.Log
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
+import android.widget.NumberPicker
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -46,6 +48,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var trackIdTextView: TextView
     private lateinit var trackProgressBar: ProgressBar
     private lateinit var startTestButton: Button
+    private lateinit var startEditTextNumber: EditText
+    private lateinit var endEditTextNumber: EditText
 
     // +--------------+
     // | UI data vars |
@@ -55,13 +59,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // +------------------+
     // | MediaPlayer vars |
     // +------------------+
-    private lateinit var mediaPlayer: MediaPlayer
     private var playingMediaPlayer: MediaPlayer? = null
-    private var nextMediaPlayer: MediaPlayer? = null
-    private var playingResourceFd: AssetFileDescriptor? = null
-    private var nextResourceFd: AssetFileDescriptor? = null
-    private var isNextPrepared = false
     private lateinit var trackStartTimestamp: TimeMark
+    private var startTrackId = 0
+    private var endTrackId = 0
     private var playingTrackId = 0
     private lateinit var tracks: ArrayList<String>
     private lateinit var trackNames: ArrayList<String>
@@ -81,6 +82,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // +------------------------------------------------------------------------------------------+
     // | ================================= Main Activity ======================================== |
     // +------------------------------------------------------------------------------------------+
+    @SuppressLint("SetTextI18n")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -96,16 +98,22 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         trackIdTextView = findViewById(R.id.trackIdTextView)
         trackProgressBar = findViewById(R.id.trackProgressBar)
         startTestButton = findViewById(R.id.startTestButton)
+        startEditTextNumber = findViewById(R.id.startEditTextNumber)
+        endEditTextNumber = findViewById(R.id.endEditTextNumber)
 
         // Initialize Buttons
         startTestButton.setOnClickListener { startTest() }
 
         // Initialize media
         readTestTracks()
-        mediaPlayer = createMediaPlayer(0)
 
         // Initialize sensors
         setupSensors()
+
+        // Initialize UI data
+        trackIdTextView.text = "0/${tracks.size}"
+        startEditTextNumber.hint = "0"
+        endEditTextNumber.hint = tracks.size.toString()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
@@ -150,6 +158,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     @SuppressLint("SetTextI18n")
     private fun updateHzView(hz: Double) {
         hzTextView.text = "%.1fHz".format(hz)
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun updateTrackInfo() {
+        trackNameTextView.text = trackNames[playingTrackId]
+        trackIdTextView.text = "${playingTrackId - startTrackId}/${endTrackId - startTrackId}"
     }
 
     private fun logAccelerometerData(x: Double, y: Double, z: Double) {
@@ -203,11 +217,21 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         dataFile.writeText("Timestamp, X, Y, Z, MediaTimestamp, CalculatedMediaTimestamp, TrackName\n")
 
         // Restart MediaPlayer
-        playingMediaPlayer = mediaPlayer
-        playingTrackId = 0
+        startTrackId = 0
+        if (startEditTextNumber.text.isNotEmpty()) {
+            startTrackId = startEditTextNumber.text.toString().toInt()
+        }
 
-        trackNameTextView.text = trackNames[playingTrackId]
-        trackIdTextView.text = "$playingTrackId/${tracks.size}"
+        endTrackId = tracks.size
+        if (endEditTextNumber.text.isNotEmpty()) {
+            endTrackId = endEditTextNumber.text.toString().toInt()
+        }
+
+        val mediaPlayer = createMediaPlayer(startTrackId)
+        playingMediaPlayer = mediaPlayer
+        playingTrackId = startTrackId
+
+        updateTrackInfo()
 
         mediaPlayer.start()
         trackStartTimestamp = timeSource.markNow()
@@ -243,7 +267,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun createMediaPlayer(id: Int): MediaPlayer {
         val player = MediaPlayer()
 
-        player.setDataSource(assets.openFd(tracks[id]))
+        val assetFd = assets.openFd(tracks[id])
+        player.setDataSource(assetFd)
         player.prepare()
 
         player.setVolume(1f, 1f)
@@ -253,13 +278,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             player.reset()
             player.release()
 
-            if (id + 1 < tracks.size) {
+            assetFd.close()
+
+            if (id + 1 < endTrackId) {
                 val nextPlayer = createMediaPlayer(id + 1)
                 playingMediaPlayer = nextPlayer
                 playingTrackId = id + 1
 
-                trackNameTextView.text = trackNames[playingTrackId]
-                trackIdTextView.text = "$playingTrackId/${tracks.size}"
+                updateTrackInfo()
 
                 nextPlayer.start()
                 trackStartTimestamp = timeSource.markNow()
